@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <meta charset="UTF-8">
+    <title>語音日記</title>
+    <style>
+        body {
+            font-family: sans-serif;
+        }
+
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease;
+        }
+
+        #loading.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>語音日記</h1>
+    <label for="model">選擇模型：</label>
+    <select id="model">
+        <option value="tiny">tiny</option>
+        <option value="base" selected>base</option>
+        <option value="small">small</option>
+        <option value="medium">medium</option>
+        <option value="large-v3">large-v3</option>
+    </select>
+    <br>
+    <button id="startBtn">🎙️ 開始錄音</button>
+    <button id="stopBtn" disabled>⏹️ 停止錄音</button>
+    <button id="uploadBtn" disabled>☁️ 上傳辨識</button>
+    <button id="summarizeBtn" disabled>📝 總結</button> <!-- ✅ 新增：總結按鈕 -->
+    <br><br>
+    <div id="timer">尚未開始錄音</div>
+    <br>
+    <audio id="audioPlayer" controls></audio>
+
+    <p><strong>逐字稿：</strong></p>
+    <p id="transcript">（這裡會顯示語音轉文字的結果）</p>
+
+    <p><strong>摘要：</strong></p>
+    <p id="summary">（這裡會顯示整理後的摘要）</p> <!-- ✅ 新增：摘要顯示區 -->
+
+    <!-- 🔄 Loading 畫面 -->
+    <div id="loading">🔄 處理中，請稍候...</div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let recordSeconds = 0;
+        let timerInterval;
+
+        const startBtn = document.getElementById("startBtn");
+        const stopBtn = document.getElementById("stopBtn");
+        const uploadBtn = document.getElementById("uploadBtn");
+        const summarizeBtn = document.getElementById("summarizeBtn"); // ✅ 新增
+        const audioPlayer = document.getElementById("audioPlayer");
+        const transcriptEl = document.getElementById("transcript");
+        const summaryEl = document.getElementById("summary"); // ✅ 新增
+        const loading = document.getElementById("loading");
+        const timerEl = document.getElementById("timer");
+
+        startBtn.onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.start();
+            audioChunks = [];
+            recordSeconds = 0;
+
+            timerEl.textContent = "錄音中：0 秒";
+            timerInterval = setInterval(() => {
+                recordSeconds++;
+                timerEl.textContent = `錄音中：${recordSeconds} 秒`;
+            }, 1000);
+
+            mediaRecorder.addEventListener("dataavailable", event => {
+                audioChunks.push(event.data);
+            });
+
+            mediaRecorder.addEventListener("stop", () => {
+                clearInterval(timerInterval);
+                timerEl.textContent = `錄音完成，總長：${recordSeconds} 秒`;
+
+                const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+                audioPlayer.src = URL.createObjectURL(audioBlob);
+
+                uploadBtn.onclick = async () => {
+                    const modelSelect = document.getElementById("model");
+                    const selectedModel = modelSelect.value;
+                    const formData = new FormData();
+                    formData.append("audio", audioBlob, "recording.webm");
+
+                    loading.classList.add("active");
+
+                    try {
+                        const response = await fetch("http://localhost:8080/api/upload-audio", {
+                            method: "POST",
+                            body: formData,
+                            headers: {
+                                "X-Model": selectedModel
+                            }
+                        });
+
+                        const data = await response.json();
+                        transcriptEl.textContent = data.transcript || "⚠️ 無法辨識語音";
+
+                        if (data.transcript) {
+                            summarizeBtn.disabled = false; // ✅ 辨識出來後，開放總結按鈕
+                        }
+                    } catch (e) {
+                        transcriptEl.textContent = "⚠️ 發生錯誤：" + e.message;
+                    } finally {
+                        loading.classList.remove("active");
+                    }
+                };
+
+                uploadBtn.disabled = false;
+            });
+
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        };
+
+        stopBtn.onclick = () => {
+            mediaRecorder.stop();
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        };
+
+        // ✅ 新增 summarize 按鈕功能
+        summarizeBtn.onclick = async () => {
+            const doc = transcriptEl.textContent.trim();
+            if (!doc || doc === "（這裡會顯示語音轉文字的結果）") {
+                alert("⚠️ 尚未產生逐字稿！");
+                return;
+            }
+
+            loading.classList.add("active");
+
+            try {
+                const response = await fetch("http://localhost:8080/api/summarize", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ doc })
+                });
+
+                const data = await response.json();
+
+                if (data.summary) {
+                    // 這邊用 marked 套件把 markdown 轉成 HTML
+                    summaryEl.innerHTML = marked.parse(data.summary);
+                } else {
+                    summaryEl.textContent = "⚠️ 無法產生摘要";
+                }
+
+            } catch (e) {
+                summaryEl.textContent = "⚠️ 摘要錯誤：" + e.message;
+            } finally {
+                loading.classList.remove("active");
+            }
+        };
+    </script>
+</body>
+
+</html>

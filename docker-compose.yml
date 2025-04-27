@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  laravel:
+    build:
+      context: .
+      dockerfile: docker/laravel/Dockerfile
+    container_name: laravel
+    volumes:
+      - ./laravel-app:/var/www
+    working_dir: /var/www
+    depends_on:
+      - whisper
+    networks:
+      - app-network
+
+  whisper:
+    build:
+      context: ./whisper
+      dockerfile: ../docker/whisper/Dockerfile
+    container_name: whisper
+    volumes:
+      - ./whisper:/app
+      - ./audio:/audio
+    networks:
+      - app-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./laravel-app:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - laravel
+    networks:
+      - app-network
+
+  taide:
+    build:
+      context: ./taide
+      dockerfile: ../docker/taide/Dockerfile
+    container_name: taide
+    volumes:
+      - ./taide/app.py:/app/app.py
+      - ../../../models:/models # ✅ 把本機模型資料夾掛進 container 的 /models
+    ports:
+      - "5002:5000"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
